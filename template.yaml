@@ -1,0 +1,48 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  github-tracker
+  Scheduled Lambda to track GitHub events and send email notifications.
+
+Parameters:
+  PollIntervalMinutes:
+    Type: String
+    Default: "30"
+    Description: "How often the Lambda should run and check for events (in minutes)"
+
+Resources:
+  TrackerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: tracker.handler
+      Runtime: nodejs20.x
+      Architectures:
+        - arm64
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          POLL_INTERVAL_MINUTES: !Ref PollIntervalMinutes
+      
+      # EventBridge Scheduler trigger (Configurable via Parameter)
+      Events:
+        ScheduledPoll:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: !Sub "rate(${PollIntervalMinutes} minutes)"
+            Name: GithubTrackerPollSchedule
+            Description: Triggers the GitHub Tracker every 30 minutes
+
+      # IAM Policies granting access to SSM and KMS
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/github-tracker/prod/*"
+            - Effect: Allow
+              Action:
+                - kms:Decrypt
+              Resource: "*"
