@@ -5,11 +5,5 @@
       "source": "/(.*)",
       "destination": "/tracker.js"
     }
-  ],
-  "crons": [
-    {
-      "path": "/trigger-poll",
-      "schedule": "*/30 * * * *"
-    }
   ]
 }

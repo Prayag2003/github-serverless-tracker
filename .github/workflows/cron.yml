@@ -1,0 +1,16 @@
+name: Tracker Cron Job
+
+on:
+  schedule:
+    # Run every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  ping_vercel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Vercel Endpoint
+        run: |
+          # Replace YOUR_VERCEL_URL.vercel.app with the actual URL from Vercel
+          curl -f -s https://${{ secrets.VERCEL_URL }}/trigger-poll || echo 'Failed to ping Vercel, but continuing'
