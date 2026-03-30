@@ -34,6 +34,9 @@ It dynamically pulls secrets from AWS SSM during execution, keeping credentials 
          [ User Inbox ]
 ```
 
+## Deployment
+![Serverless Architecture Map](./assets/image.png)
+
 ## Setup & Deployment
 
 1. **Install AWS SAM CLI**: Make sure you have the [AWS Serverless Application Model (SAM) CLI](https://aws.amazon.com/serverless/sam/) installed.
