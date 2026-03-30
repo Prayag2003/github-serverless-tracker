@@ -14,8 +14,8 @@ Resources:
   TrackerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: ./
-      Handler: tracker.handler
+      CodeUri: src/
+      Handler: index.handler
       Runtime: nodejs20.x
       Architectures:
         - arm64
