@@ -2,6 +2,10 @@ require("dotenv").config();
 const { Resend } = require("resend");
 const fs = require("fs");
 const path = require("path");
+const express = require("express");
+
+const app = express();
+const PORT = process.env.PORT || 3000;
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const {
@@ -35,14 +39,14 @@ function saveLastEventId(id) {
 }
 
 // ── GitHub API ──────────────────────────────────────────────────────────────
+const GITHUB_HEADERS = {
+  Accept: "application/vnd.github+json",
+  "User-Agent": "github-tracker",
+};
+
 async function fetchPublicEvents() {
   const url = `https://api.github.com/users/${GITHUB_USERNAME}/events/public?per_page=30`;
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "github-tracker",
-    },
-  });
+  const res = await fetch(url, { headers: GITHUB_HEADERS });
 
   if (!res.ok) {
     console.error(`GitHub API error: ${res.status} ${res.statusText}`);
@@ -50,6 +54,49 @@ async function fetchPublicEvents() {
   }
 
   return res.json();
+}
+
+// Fetch commit details via Compare API when events don't include them
+async function fetchCommitsForPush(repoName, beforeSha, headSha) {
+  const url = `https://api.github.com/repos/${repoName}/compare/${beforeSha}...${headSha}`;
+  try {
+    const res = await fetch(url, { headers: GITHUB_HEADERS });
+    if (!res.ok) {
+      console.error(`  Compare API error for ${repoName}: ${res.status}`);
+      return [];
+    }
+    const data = await res.json();
+    return (data.commits || []).map((c) => ({
+      sha: c.sha,
+      message: c.commit?.message || "(no message)",
+      author: {
+        name: c.commit?.author?.name || c.author?.login || "unknown",
+        email: c.commit?.author?.email || "",
+      },
+      url: c.html_url,
+    }));
+  } catch (err) {
+    console.error(`  Failed to fetch commits for ${repoName}:`, err.message);
+    return [];
+  }
+}
+
+// Enrich PushEvents that are missing commit data
+async function enrichPushEvents(events) {
+  for (const ev of events) {
+    if (ev.type !== "PushEvent") continue;
+    if (ev.payload.commits && ev.payload.commits.length > 0) continue;
+
+    const { before, head } = ev.payload;
+    if (!before || !head) continue;
+
+    console.log(`  Fetching commits for ${ev.repo.name} (${before.substring(0, 7)}...${head.substring(0, 7)})`);
+    const commits = await fetchCommitsForPush(ev.repo.name, before, head);
+    ev.payload.commits = commits;
+    ev.payload.size = commits.length;
+    ev.payload.distinct_size = commits.length;
+  }
+  return events;
 }
 
 // ── Email ───────────────────────────────────────────────────────────────────
@@ -311,20 +358,63 @@ async function poll() {
 
   console.log(`  Found ${newEvents.length} new event(s).`);
   saveLastEventId(newEvents[0].id);
+  await enrichPushEvents(newEvents);
   await sendNotification(newEvents);
 }
 
+// ── Express App ─────────────────────────────────────────────────────────────
+app.get("/", (req, res) => {
+  const lastEventId = loadLastEventId();
+  res.send(`
+    <html>
+      <head>
+        <title>GitHub Tracker Setup</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; background: #f4f4f8; }
+          .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+          code { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; }
+          .status { display: inline-block; padding: 4px 12px; border-radius: 20px; background: #dcfce7; color: #166534; font-weight: 600; font-size: 14px; margin-bottom: 16px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>🚀 GitHub Activity Tracker</h1>
+          <div class="status">🟢 Service is running</div>
+          <p><strong>Watching User:</strong> <a href="https://github.com/${GITHUB_USERNAME}" target="_blank">@${GITHUB_USERNAME}</a></p>
+          <p><strong>Notifications Sent To:</strong> ${NOTIFY_EMAIL}</p>
+          <p><strong>Polling Interval:</strong> ${Number(POLL_INTERVAL_MS) / 1000} seconds</p>
+          <p><strong>Last Checked Event ID:</strong> <code>${lastEventId || "None (will populate on first poll)"}</code></p>
+          <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;">
+          <p style="color: #64748b; font-size: 14px;">The app is actively polling GitHub in the background. Keep this server running, and you'll receive an email via Resend whenever new push events are found.</p>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+app.get("/trigger-poll", async (req, res) => {
+  try {
+    await poll();
+    res.json({ success: true, message: "Poll triggered manually." });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ── Start ───────────────────────────────────────────────────────────────────
-console.log(`
+app.listen(PORT, () => {
+  console.log(`
 ┌──────────────────────────────────────────┐
 │         GitHub Activity Tracker          │
 ├──────────────────────────────────────────┤
 │  Watching:  ${GITHUB_USERNAME.padEnd(28)}│
 │  Notify:    ${NOTIFY_EMAIL.padEnd(28)}│
 │  Interval:  ${(Number(POLL_INTERVAL_MS) / 1000 + "s").padEnd(28)}│
+│  Server:    http://localhost:${PORT.toString().padEnd(24)}│
 └──────────────────────────────────────────┘
-`);
+  `);
 
-// Run immediately, then on interval
-poll();
-setInterval(poll, Number(POLL_INTERVAL_MS));
+  // Run immediately, then on interval
+  poll();
+  setInterval(poll, Number(POLL_INTERVAL_MS));
+});
