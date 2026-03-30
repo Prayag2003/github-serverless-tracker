@@ -402,19 +402,27 @@ app.get("/trigger-poll", async (req, res) => {
 });
 
 // ── Start ───────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`
-┌──────────────────────────────────────────┐
-│         GitHub Activity Tracker          │
-├──────────────────────────────────────────┤
-│  Watching:  ${GITHUB_USERNAME.padEnd(28)}│
-│  Notify:    ${NOTIFY_EMAIL.padEnd(28)}│
-│  Interval:  ${(Number(POLL_INTERVAL_MS) / 1000 + "s").padEnd(28)}│
-│  Server:    http://localhost:${PORT.toString().padEnd(24)}│
-└──────────────────────────────────────────┘
-  `);
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log("=========================================");
+    console.log(`Server started successfully on port ${PORT}`);
+    console.log("=========================================");
+    console.log(`
+  ┌──────────────────────────────────────────┐
+  │         GitHub Activity Tracker          │
+  ├──────────────────────────────────────────┤
+  │  Watching:  ${GITHUB_USERNAME.padEnd(28)}│
+  │  Notify:    ${NOTIFY_EMAIL.padEnd(28)}│
+  │  Interval:  ${(Number(POLL_INTERVAL_MS) / 1000 + "s").padEnd(28)}│
+  │  Server:    http://localhost:${PORT.toString().padEnd(24)}│
+  └──────────────────────────────────────────┘
+    `);
 
-  // Run immediately, then on interval
-  poll();
-  setInterval(poll, Number(POLL_INTERVAL_MS));
-});
+    // Run immediately, then on interval
+    poll();
+    setInterval(poll, Number(POLL_INTERVAL_MS));
+  });
+}
+
+// Export the app for Vercel / serverless deployments
+module.exports = app;
