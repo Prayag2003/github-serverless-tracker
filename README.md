@@ -1,5 +1,7 @@
 # GitHub Activity Tracker
 
+![Github Tracker](assets/output.png)
+
 A beautifully simple, entirely serverless AWS Lambda function that monitors a GitHub user account for new activity and sends visually rich, professionally formatted HTML email updates when public events (like commits, PRs, issues) are detected.
 
 It dynamically pulls secrets from AWS SSM during execution, keeping credentials entirely safe and off your servers. Driven by an AWS EventBridge scheduler, this system requires zero operational overhead or constantly running servers.
