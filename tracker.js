@@ -1,41 +1,46 @@
 require("dotenv").config();
 const { Resend } = require("resend");
-const fs = require("fs");
-const path = require("path");
-const express = require("express");
-
-const app = express();
-const PORT = process.env.PORT || 3000;
+const { SSMClient, GetParametersCommand } = require("@aws-sdk/client-ssm");
 
 // ── Config ──────────────────────────────────────────────────────────────────
-const {
-  GITHUB_USERNAME,
-  RESEND_API_KEY,
-  NOTIFY_EMAIL,
-  POLL_INTERVAL_MS = "1800000",
-} = process.env;
+let GITHUB_USERNAME = process.env.GITHUB_USERNAME;
+let NOTIFY_EMAIL = process.env.NOTIFY_EMAIL;
+const POLL_INTERVAL_MINUTES = parseInt(process.env.POLL_INTERVAL_MINUTES || "30", 10);
+const POLL_INTERVAL_MS = POLL_INTERVAL_MINUTES * 60 * 1000;
 
-if (!GITHUB_USERNAME || !RESEND_API_KEY || !NOTIFY_EMAIL) {
-  console.error(
-    "Missing required env vars. Copy .env.example to .env and fill it in."
-  );
-  process.exit(1);
-}
+let resend;
+const ssmClient = new SSMClient();
 
-const resend = new Resend(RESEND_API_KEY);
-const STATE_FILE = path.join(__dirname, "last_event_id.txt");
+async function initSecrets() {
+  if (resend) return;
 
-// ── State ───────────────────────────────────────────────────────────────────
-function loadLastEventId() {
-  try {
-    return fs.readFileSync(STATE_FILE, "utf-8").trim();
-  } catch {
-    return null;
+  const isMissing = !process.env.RESEND_API_KEY || !GITHUB_USERNAME || !NOTIFY_EMAIL;
+
+  if (isMissing) {
+    console.log("Fetching config from SSM...");
+    try {
+      const command = new GetParametersCommand({
+        Names: [
+          "/github-tracker/prod/resend-api-key",
+          "/github-tracker/prod/github-username",
+          "/github-tracker/prod/notify-email"
+        ],
+        WithDecryption: true
+      });
+      const response = await ssmClient.send(command);
+      
+      for (const param of response.Parameters) {
+        if (param.Name.includes("resend-api-key")) process.env.RESEND_API_KEY = param.Value;
+        if (param.Name.includes("github-username")) GITHUB_USERNAME = param.Value;
+        if (param.Name.includes("notify-email")) NOTIFY_EMAIL = param.Value;
+      }
+    } catch (err) {
+      console.error("Failed to fetch from SSM:", err);
+      throw err;
+    }
   }
-}
 
-function saveLastEventId(id) {
-  fs.writeFileSync(STATE_FILE, id, "utf-8");
+  resend = new Resend(process.env.RESEND_API_KEY);
 }
 
 // ── GitHub API ──────────────────────────────────────────────────────────────
@@ -323,106 +328,41 @@ async function sendNotification(events) {
   }
 }
 
-// ── Poll Loop ───────────────────────────────────────────────────────────────
-async function poll() {
-  const now = new Date().toLocaleTimeString();
-  console.log(`[${now}] Polling events for ${GITHUB_USERNAME}...`);
+// ── AWS Lambda Handler ──────────────────────────────────────────────────────
+exports.handler = async (event, context) => {
+  await initSecrets();
+
+  if (!GITHUB_USERNAME || !NOTIFY_EMAIL || !resend) {
+    console.error("Missing required config");
+    return { statusCode: 500, body: "Server misconfiguration" };
+  }
+
+  console.log(`Lambda triggered. Checking events for ${GITHUB_USERNAME}...`);
 
   const events = await fetchPublicEvents();
   if (!events.length) {
-    console.log("  No events found.");
-    return;
+    console.log("  No events found on GitHub.");
+    return { statusCode: 200, body: "No events found" };
   }
 
-  const lastEventId = loadLastEventId();
-  let newEvents;
+  // Lambda is stateless. We filter events created within the last POLL_INTERVAL_MS.
+  // This ensures we only email about events that happened since the last scheduled run.
+  const timeWindowMs = Number(POLL_INTERVAL_MS);
+  const cutoffTime = Date.now() - timeWindowMs;
 
-  if (!lastEventId) {
-    // First run — don't flood inbox, just save the latest ID
-    console.log(`  First run. Saving latest event ID: ${events[0].id}`);
-    saveLastEventId(events[0].id);
-    return;
-  }
-
-  // Collect all events newer than the last one we saw
-  newEvents = [];
-  for (const ev of events) {
-    if (ev.id === lastEventId) break;
-    newEvents.push(ev);
-  }
+  const newEvents = events.filter(ev => {
+    const eventTime = new Date(ev.created_at).getTime();
+    return eventTime >= cutoffTime;
+  });
 
   if (!newEvents.length) {
-    console.log("  No new events.");
-    return;
+    console.log("  No new events in the last time window.");
+    return { statusCode: 200, body: "No new events" };
   }
 
   console.log(`  Found ${newEvents.length} new event(s).`);
-  saveLastEventId(newEvents[0].id);
   await enrichPushEvents(newEvents);
   await sendNotification(newEvents);
-}
 
-// ── Express App ─────────────────────────────────────────────────────────────
-app.get("/", (req, res) => {
-  const lastEventId = loadLastEventId();
-  res.send(`
-    <html>
-      <head>
-        <title>GitHub Tracker Setup</title>
-        <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; background: #f4f4f8; }
-          .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-          code { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; }
-          .status { display: inline-block; padding: 4px 12px; border-radius: 20px; background: #dcfce7; color: #166534; font-weight: 600; font-size: 14px; margin-bottom: 16px; }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h1>🚀 GitHub Activity Tracker</h1>
-          <div class="status">🟢 Service is running</div>
-          <p><strong>Watching User:</strong> <a href="https://github.com/${GITHUB_USERNAME}" target="_blank">@${GITHUB_USERNAME}</a></p>
-          <p><strong>Notifications Sent To:</strong> ${NOTIFY_EMAIL}</p>
-          <p><strong>Polling Interval:</strong> ${Number(POLL_INTERVAL_MS) / 1000} seconds</p>
-          <p><strong>Last Checked Event ID:</strong> <code>${lastEventId || "None (will populate on first poll)"}</code></p>
-          <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;">
-          <p style="color: #64748b; font-size: 14px;">The app is actively polling GitHub in the background. Keep this server running, and you'll receive an email via Resend whenever new push events are found.</p>
-        </div>
-      </body>
-    </html>
-  `);
-});
-
-app.get("/trigger-poll", async (req, res) => {
-  try {
-    await poll();
-    res.json({ success: true, message: "Poll triggered manually." });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ── Start ───────────────────────────────────────────────────────────────────
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log("=========================================");
-    console.log(`Server started successfully on port ${PORT}`);
-    console.log("=========================================");
-    console.log(`
-  ┌──────────────────────────────────────────┐
-  │         GitHub Activity Tracker          │
-  ├──────────────────────────────────────────┤
-  │  Watching:  ${GITHUB_USERNAME.padEnd(28)}│
-  │  Notify:    ${NOTIFY_EMAIL.padEnd(28)}│
-  │  Interval:  ${(Number(POLL_INTERVAL_MS) / 1000 + "s").padEnd(28)}│
-  │  Server:    http://localhost:${PORT.toString().padEnd(24)}│
-  └──────────────────────────────────────────┘
-    `);
-
-    // Run immediately, then on interval
-    poll();
-    setInterval(poll, Number(POLL_INTERVAL_MS));
-  });
-}
-
-// Export the app for Vercel / serverless deployments
-module.exports = app;
+  return { statusCode: 200, body: `Processed ${newEvents.length} events` };
+};
