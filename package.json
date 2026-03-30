@@ -5,7 +5,8 @@
   "main": "tracker.js",
   "scripts": {
     "start": "node tracker.js",
-    "dev": "node --watch tracker.js"
+    "dev": "node --watch tracker.js",
+    "build": "echo 'No build required'"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
