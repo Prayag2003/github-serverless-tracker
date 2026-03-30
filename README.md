@@ -1,6 +1,6 @@
 # GitHub Activity Tracker
 
-![Github Tracker](assets/output.png)
+![alt text](./assets/output.png)
 
 A beautifully simple, entirely serverless AWS Lambda function that monitors a GitHub user account for new activity and sends visually rich, professionally formatted HTML email updates when public events (like commits, PRs, issues) are detected.
 
@@ -53,5 +53,73 @@ It dynamically pulls secrets from AWS SSM during execution, keeping credentials 
    ```
    *Note: Using AWS SAM means `template.yaml` and `samconfig.toml` are strictly required to define the architecture and remember deployment locations.*
 
-## Development
-If you're testing functionality locally without SAM, simply create a local `.env` with variables `GITHUB_USERNAME`, `NOTIFY_EMAIL`, and `RESEND_API_KEY`.
+## Project Structure
+
+```text
+github-tracker/
+├── src/                     # Lambda runtime code
+│   ├── index.js             # Lambda handler (entry point)
+│   ├── config.js            # SSM secrets + env config loader
+│   ├── github.js            # GitHub API integration
+│   ├── email.js             # HTML email builder + Resend dispatch
+│   └── package.json         # Runtime dependencies (dotenv, resend)
+├── standalone/
+│   └── direct-deploy.js     # Single-file version for manual Lambda upload
+├── assets/                  # Images for documentation
+├── template.yaml            # AWS SAM infrastructure-as-code
+├── samconfig.toml           # SAM deployment preferences
+├── .sample.env              # Example environment variables
+└── .gitignore
+```
+
+## Prerequisites
+
+- [AWS CLI](https://aws.amazon.com/cli/) configured with valid credentials
+- [AWS SAM CLI](https://aws.amazon.com/serverless/sam/) installed
+- A [Resend](https://resend.com) account and API key
+- Node.js 20.x
+
+## SSM Parameter Setup
+
+Create three `SecureString` parameters in AWS Systems Manager:
+
+```bash
+aws ssm put-parameter --name "/github-tracker/prod/resend-api-key" \
+  --value "re_your_key_here" --type SecureString
+
+aws ssm put-parameter --name "/github-tracker/prod/github-username" \
+  --value "your-github-username" --type SecureString
+
+aws ssm put-parameter --name "/github-tracker/prod/notify-email" \
+  --value "you@example.com" --type SecureString
+```
+
+## Local Development
+
+1. Copy the sample env file and fill in your values:
+   ```bash
+   cp .sample.env .env
+   ```
+
+2. Install dependencies:
+   ```bash
+   cd src && npm install
+   ```
+
+3. Invoke the handler locally:
+   ```bash
+   node -e "require('./src/index.js').handler({}, {})"
+   ```
+
+> **Note:** When running locally, the code reads from `.env` directly. SSM is only used inside the Lambda runtime.
+
+## Tech Stack
+
+| Component         | Technology                     |
+|-------------------|--------------------------------|
+| Runtime           | Node.js 20.x (AWS Lambda)     |
+| IaC               | AWS SAM / CloudFormation       |
+| Scheduler         | AWS EventBridge                |
+| Secrets           | AWS SSM Parameter Store + KMS  |
+| Email             | Resend API                     |
+| Data Source        | GitHub Public Events API       |
